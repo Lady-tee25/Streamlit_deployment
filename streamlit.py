@@ -1,242 +1,756 @@
-import pickle
-import numpy as np
-import pandas as pd
+import os
 import streamlit as st
 
-# 1. Page Configuration
-st.set_page_config(
-    page_title="AI Loan Intelligence System",
-    page_icon="✨",
-    layout="wide",
-    initial_sidebar_state="expanded",
+from dotenv import load_dotenv
+from langchain_community.vectorstores import SKLearnVectorStore
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+
+# ============================================================
+# LOAD ENVIRONMENT VARIABLES
+# ============================================================
+
+load_dotenv()
+
+GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
+EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY")
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# -------------------------
+# Groq / Chat model
+# -------------------------
+
+CHAT_BASE_URL = "https://api.groq.com/openai/v1"
+CHAT_MODEL = "openai/gpt-oss-20b"
+
+
+# -------------------------
+# Embedding model
+# -------------------------
+
+EMBEDDING_BASE_URL = "https://qwen-embed.publicaai.com/v1"
+EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+
+
+# -------------------------
+# Existing vector store
+# -------------------------
+#
+# app.py is assumed to be inside:
+#
+# Slac/
+#   app.py
+#   msme_store/
+#       msme_index.json
+#
+# Therefore, we build the path relative to app.py.
+#
+
+STORE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "msme_store",
+    "msme_index.json"
 )
 
-# 2. Modern Glassmorphism & Dark Mode Custom Styling
+
+# ============================================================
+# STREAMLIT PAGE CONFIG
+# ============================================================
+
+st.set_page_config(
+    page_title="Health Nigeria RAG Assistant",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+# ============================================================
+# CUSTOM CSS
+# ============================================================
+
 st.markdown(
     """
     <style>
-    /* Global Page Styling */
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
-        color: #f8fafc;
-        font-family: 'Inter', sans-serif;
-    }
 
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: rgba(15, 23, 42, 0.7) !important;
-        backdrop-filter: blur(12px);
-        border-right: 1px solid rgba(255, 255, 255, 0.1);
-    }
-
-    /* Hero Banner Component */
-    .hero-container {
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(168, 85, 247, 0.2) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        backdrop-filter: blur(16px);
-        padding: 2rem;
-        border-radius: 20px;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
-    }
-    .hero-title {
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
-    }
-    .hero-subtitle {
-        color: #94a3b8;
-        font-size: 1.1rem;
-        font-weight: 400;
-    }
-
-    /* Input Card Container */
-    .input-card {
-        background: rgba(30, 41, 59, 0.7);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(12px);
-        padding: 1.5rem;
-        border-radius: 16px;
-        margin-bottom: 1rem;
-    }
-
-    /* Styled Action Button */
-    div.stButton > button {
-        width: 100%;
-        background: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
-        color: #ffffff;
-        border: none;
-        padding: 0.85rem 1.5rem;
-        font-size: 1.1rem;
+    /* Main title */
+    .main-title {
+        font-size: 38px;
         font-weight: 700;
-        border-radius: 12px;
-        box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.4);
-        transition: all 0.3s ease;
-    }
-    div.stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 15px 25px -5px rgba(168, 85, 247, 0.5);
+        color: #0F766E;
+        margin-bottom: 5px;
     }
 
-    /* Result Notification Cards */
-    .result-approved {
-        background: rgba(16, 185, 129, 0.15);
-        border: 1px solid #10b981;
-        border-radius: 16px;
-        padding: 1.5rem;
-        text-align: center;
-        box-shadow: 0 0 25px rgba(16, 185, 129, 0.2);
+    .subtitle {
+        font-size: 17px;
+        color: #64748B;
+        margin-bottom: 25px;
     }
-    .result-rejected {
-        background: rgba(239, 68, 68, 0.15);
-        border: 1px solid #ef4444;
-        border-radius: 16px;
-        padding: 1.5rem;
-        text-align: center;
-        box-shadow: 0 0 25px rgba(239, 68, 68, 0.2);
+
+    /* Source box */
+    .source-box {
+        background-color: #F8FAFC;
+        padding: 12px;
+        border-radius: 8px;
+        border-left: 4px solid #0F766E;
+        margin-top: 10px;
     }
+
+    /* Chat input */
+    .stChatInput {
+        padding-bottom: 20px;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #F8FAFC;
+    }
+
     </style>
-""",
-    unsafe_allow_html=True,
+    """,
+    unsafe_allow_html=True
 )
 
 
-# 3. Model Loader
-@st.cache_resource
-def load_model():
-    with open("logistic_regression_model.pkl", "rb") as file:
-        return pickle.load(file)
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">🏥 Health Nigeria RAG Assistant</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="subtitle">'
+    'Ask questions about health policies, healthcare, '
+    'regulations, industry information, and related topics in Nigeria.'
+    '</div>',
+    unsafe_allow_html=True
+)
 
 
-try:
-    model = load_model()
-except FileNotFoundError:
+# ============================================================
+# CHECK API KEYS
+# ============================================================
+
+if not GROQ_API_KEY:
+
     st.error(
-        "❌ Model file `logistic_regression_model.pkl` not found. Please verify the file path."
+        "OPENAI_API_KEY was not found.\n\n"
+        "Please add your Groq API key to the .env file."
     )
+
     st.stop()
 
-# 4. Sidebar Controls & Metadata
-with st.sidebar:
-    st.title("⚡ Settings & Info")
-    st.info(
-        "This evaluation engine uses a trained Logistic Regression model to assess financial default risk based on real-time metrics."
-    )
-    st.markdown("---")
-    st.caption("Model Version: v1.0.4")
-    st.caption("Engine: Scikit-Learn / Logistic Regression")
 
-# 5. Header Banner
-st.markdown(
+if not EMBEDDING_API_KEY:
+
+    st.error(
+        "EMBEDDING_API_KEY was not found.\n\n"
+        "Please add your embedding API key to the .env file."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# CHECK VECTOR STORE
+# ============================================================
+
+if not os.path.exists(STORE_PATH):
+
+    st.error(
+        f"""
+Vector store not found.
+
+Expected location:
+
+{STORE_PATH}
+
+Please make sure that:
+
+1. The `msme_store` folder exists.
+2. `msme_index.json` exists inside it.
+3. Your indexing script has already created the vector store.
+"""
+    )
+
+    st.stop()
+
+
+# ============================================================
+# LOAD EMBEDDINGS
+# ============================================================
+
+@st.cache_resource
+def load_embeddings():
+
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        api_key=EMBEDDING_API_KEY,
+        base_url=EMBEDDING_BASE_URL
+    )
+
+    return embeddings
+
+
+# ============================================================
+# LOAD SKLEARN VECTOR STORE
+# ============================================================
+
+@st.cache_resource
+def load_vectorstore():
+
+    embeddings = load_embeddings()
+
+    vectorstore = SKLearnVectorStore(
+        embedding=embeddings,
+        persist_path=STORE_PATH,
+        serializer="json"
+    )
+
+    return vectorstore
+
+
+# ============================================================
+# LOAD RETRIEVER
+# ============================================================
+
+@st.cache_resource
+def load_retriever():
+
+    vectorstore = load_vectorstore()
+
+    retriever = vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": 4,
+            "fetch_k": 10
+        }
+    )
+
+    return retriever
+
+
+# ============================================================
+# LOAD CHAT MODEL
+# ============================================================
+
+@st.cache_resource
+def load_chat_model():
+
+    chat_model = ChatOpenAI(
+        api_key=GROQ_API_KEY,
+        base_url=CHAT_BASE_URL,
+        model=CHAT_MODEL,
+        temperature=0
+    )
+
+    return chat_model
+
+
+# ============================================================
+# RAG PROMPT
+# ============================================================
+
+prompt = ChatPromptTemplate.from_template(
     """
-    <div class="hero-container">
-        <div class="hero-title">Loan Qualification Predictor</div>
-        <div class="hero-subtitle">Evaluate loan applications instantly using machine learning risk modeling</div>
-    </div>
-""",
-    unsafe_allow_html=True,
+You are a knowledgeable data analyst providing insights about
+Health in Nigeria.
+
+Your task is to answer the user's question using ONLY the
+information contained in the provided context.
+
+The context may contain information about:
+
+- Health in Nigeria
+- Healthcare
+- Health policies
+- Healthcare regulations
+- Government programs
+- Healthcare organizations
+- Health industry information
+- Starting a health-related business
+- Growing a health-related business
+- Sustaining a health-related business
+- Industry-specific information
+- Relevant documents and sources
+
+IMPORTANT RULES:
+
+1. Use the provided context as the primary source of truth.
+
+2. Do not invent facts.
+
+3. Do not invent statistics.
+
+4. Do not invent policies or regulations.
+
+5. Do not invent URLs.
+
+6. Do not claim something is in the documents if it is not.
+
+7. If the answer cannot be found in the context, say:
+
+   "I could not find this information in the available documents."
+
+8. Answer the exact question asked by the user.
+
+9. Be clear, professional, and concise while providing
+   sufficient explanation.
+
+10. Use Markdown formatting.
+
+SOURCE RULES:
+
+If the retrieved documents contain source information, provide
+the relevant sources at the end of the answer.
+
+If a URL is available, include:
+
+**To read more:** [URL]
+
+Do not create a URL if one is not provided in the context.
+
+------------------------------------------------------------
+CONTEXT
+------------------------------------------------------------
+
+{context}
+
+------------------------------------------------------------
+QUESTION
+------------------------------------------------------------
+
+{question}
+
+------------------------------------------------------------
+ANSWER
+------------------------------------------------------------
+"""
 )
 
-# 6. Main Inputs Form Design
-st.markdown("### 📝 Enter Applicant Information")
 
-col1, col2 = st.columns(2, gap="medium")
+# ============================================================
+# CREATE RAG CHAIN
+# ============================================================
 
-with col1:
-    st.markdown('<div class="input-card">', unsafe_allow_html=True)
-    st.markdown("#### 💵 Financial Overview")
+@st.cache_resource
+def load_chain():
 
-    income = st.number_input(
-        "Annual Income ($)",
-        min_value=0,
-        max_value=2000000,
-        value=350000,
-        step=5000,
-        help="Gross annual income of the primary applicant",
+    chat_model = load_chat_model()
+
+    chain = (
+        prompt
+        | chat_model
+        | StrOutputParser()
     )
 
-    credit_score = st.slider(
-        "Credit Score (FICO)",
-        min_value=300,
-        max_value=850,
-        value=720,
-        help="Standard credit score range between 300 and 850",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    return chain
 
-with col2:
-    st.markdown('<div class="input-card">', unsafe_allow_html=True)
-    st.markdown("#### 💼 Employment & Liabilities")
 
-    employment_years = st.number_input(
-        "Employment Duration (Years)",
-        min_value=0,
-        max_value=50,
-        value=6,
-        step=1,
-        help="Consecutive years in active employment",
+# ============================================================
+# LOAD RAG COMPONENTS
+# ============================================================
+
+try:
+
+    retriever = load_retriever()
+    chain = load_chain()
+
+except Exception as e:
+
+    st.error(
+        "There was a problem loading the vector store or "
+        "embedding model."
     )
 
-    debt_ratio = st.slider(
-        "Debt-to-Income (DTI) Ratio",
-        min_value=0.00,
-        max_value=1.00,
-        value=0.35,
-        step=0.01,
-        help="Monthly debt obligations divided by gross monthly income",
+    st.exception(e)
+
+    st.stop()
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "messages" not in st.session_state:
+
+    st.session_state.messages = []
+
+
+# ============================================================
+# DISPLAY CHAT HISTORY
+# ============================================================
+
+for message in st.session_state.messages:
+
+    role = message["role"]
+
+    with st.chat_message(role):
+
+        st.markdown(
+            message["content"]
+        )
+
+        # -----------------------------------------
+        # Display sources
+        # -----------------------------------------
+
+        if message.get("sources"):
+
+            with st.expander("📚 Retrieved Sources"):
+
+                for source in message["sources"]:
+
+                    st.markdown(
+                        f"- `{source}`"
+                    )
+
+
+# ============================================================
+# CHAT INPUT
+# ============================================================
+
+question = st.chat_input(
+    "Ask a question about Health in Nigeria..."
+)
+
+
+# ============================================================
+# PROCESS QUESTION
+# ============================================================
+
+if question:
+
+    # ========================================================
+    # USER MESSAGE
+    # ========================================================
+
+    with st.chat_message("user"):
+
+        st.markdown(question)
+
+
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": question
+        }
     )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
 
-# 7. Action Button & Prediction Execution
-if st.button("🚀 Analyze Credit Risk"):
-    features = np.array(
-        [[income, credit_score, employment_years, debt_ratio]]
-    )
+    # ========================================================
+    # ASSISTANT
+    # ========================================================
 
-    prediction = model.predict(features)[0]
-    probabilities = (
-        model.predict_proba(features)[0]
-        if hasattr(model, "predict_proba")
-        else None
-    )
+    with st.chat_message("assistant"):
 
-    st.markdown("<br>", unsafe_allow_html=True)
+        try:
 
-    res_col1, res_col2 = st.columns([1, 1], gap="medium")
+            # ----------------------------------------------
+            # Retrieve documents
+            # ----------------------------------------------
 
-    with res_col1:
-        if prediction == 1:
-            st.markdown(
-                """
-                <div class="result-approved">
-                    <h2 style="color: #10b981; margin:0;">✅ APPROVED</h2>
-                    <p style="color: #e2e8f0; margin-top: 10px;">The applicant meets the eligibility threshold for loan approval.</p>
-                </div>
-            """,
-                unsafe_allow_html=True,
+            with st.spinner(
+                "🔎 Searching the knowledge base..."
+            ):
+
+                retrieved_docs = retriever.invoke(
+                    question
+                )
+
+
+            # ----------------------------------------------
+            # Check retrieval
+            # ----------------------------------------------
+
+            if not retrieved_docs:
+
+                answer = (
+                    "I could not find relevant information "
+                    "in the available documents."
+                )
+
+                st.markdown(answer)
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "sources": []
+                    }
+                )
+
+            else:
+
+                # ------------------------------------------
+                # Build context
+                # ------------------------------------------
+
+                context_parts = []
+
+                for doc in retrieved_docs:
+
+                    if doc.page_content:
+
+                        context_parts.append(
+                            doc.page_content
+                        )
+
+
+                context = "\n\n---\n\n".join(
+                    context_parts
+                )
+
+
+                # ------------------------------------------
+                # Generate answer
+                # ------------------------------------------
+
+                with st.spinner(
+                    "🤖 Generating answer..."
+                ):
+
+                    answer = chain.invoke(
+                        {
+                            "context": context,
+                            "question": question
+                        }
+                    )
+
+
+                # ------------------------------------------
+                # Display answer
+                # ------------------------------------------
+
+                st.markdown(answer)
+
+
+                # ------------------------------------------
+                # Extract sources
+                # ------------------------------------------
+
+                sources = []
+
+                for doc in retrieved_docs:
+
+                    metadata = doc.metadata or {}
+
+                    # Try common metadata names
+                    source = (
+                        metadata.get("source")
+                        or metadata.get("url")
+                        or metadata.get("link")
+                        or metadata.get("file_path")
+                        or metadata.get("filepath")
+                    )
+
+
+                    if source:
+
+                        if source not in sources:
+
+                            sources.append(source)
+
+
+                # ------------------------------------------
+                # Display retrieved documents
+                # ------------------------------------------
+
+                with st.expander(
+                    f"📖 Retrieved Documents ({len(retrieved_docs)})"
+                ):
+
+                    for i, doc in enumerate(
+                        retrieved_docs,
+                        start=1
+                    ):
+
+                        st.markdown(
+                            f"### Document {i}"
+                        )
+
+                        metadata = doc.metadata or {}
+
+                        if metadata:
+
+                            st.caption(
+                                f"Metadata: {metadata}"
+                            )
+
+                        st.write(
+                            doc.page_content[:2000]
+                        )
+
+                        if i < len(retrieved_docs):
+
+                            st.divider()
+
+
+                # ------------------------------------------
+                # Display sources
+                # ------------------------------------------
+
+                if sources:
+
+                    with st.expander(
+                        "🔗 Sources"
+                    ):
+
+                        for source in sources:
+
+                            st.markdown(
+                                f"- {source}"
+                            )
+
+
+                # ------------------------------------------
+                # Save assistant response
+                # ------------------------------------------
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "sources": sources
+                    }
+                )
+
+
+        except Exception as e:
+
+            error_message = (
+                "Sorry, something went wrong while "
+                "processing your question."
             )
-        else:
-            st.markdown(
-                """
-                <div class="result-rejected">
-                    <h2 style="color: #ef4444; margin:0;">❌ REJECTED</h2>
-                    <p style="color: #e2e8f0; margin-top: 10px;">The applicant poses a high risk profile for default.</p>
-                </div>
-            """,
-                unsafe_allow_html=True,
+
+            st.error(error_message)
+
+            st.exception(e)
+
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": error_message,
+                    "sources": []
+                }
             )
 
-    with res_col2:
-        if probabilities is not None:
-            approval_prob = probabilities[1] * 100
-            st.markdown("#### Confidence Breakdown")
-            st.metric(
-                label="Probability of Approval", value=f"{approval_prob:.1f}%"
-            )
-            st.progress(float(probabilities[1]))
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.header("⚙️ RAG Configuration")
+
+
+    # --------------------------------------------------------
+    # Vector store
+    # --------------------------------------------------------
+
+    st.markdown("### 📦 Vector Store")
+
+    st.write(
+        "SKLearnVectorStore"
+    )
+
+    st.caption(
+        "No Chroma database is used."
+    )
+
+
+    # --------------------------------------------------------
+    # Index
+    # --------------------------------------------------------
+
+    st.markdown("### 📁 Index")
+
+    st.code(
+        STORE_PATH,
+        language="text"
+    )
+
+
+    # --------------------------------------------------------
+    # Chat model
+    # --------------------------------------------------------
+
+    st.markdown("### 🤖 Chat Model")
+
+    st.code(
+        CHAT_MODEL,
+        language="text"
+    )
+
+
+    # --------------------------------------------------------
+    # Embedding model
+    # --------------------------------------------------------
+
+    st.markdown("### 🧠 Embeddings")
+
+    st.code(
+        EMBEDDING_MODEL,
+        language="text"
+    )
+
+
+    # --------------------------------------------------------
+    # Retrieval
+    # --------------------------------------------------------
+
+    st.markdown("### 🔎 Retrieval")
+
+    st.write(
+        "Method: MMR"
+    )
+
+    st.write(
+        "Documents: 4"
+    )
+
+    st.write(
+        "Fetch candidates: 10"
+    )
+
+
+    st.divider()
+
+
+    # --------------------------------------------------------
+    # Clear conversation
+    # --------------------------------------------------------
+
+    if st.button(
+        "🗑️ Clear Conversation",
+        use_container_width=True
+    ):
+
+        st.session_state.messages = []
+
+        st.rerun()
+
+
+    # --------------------------------------------------------
+    # About
+    # --------------------------------------------------------
+
+    st.divider()
+
+    st.markdown("### About")
+
+    st.caption(
+        "This chatbot uses retrieval-augmented generation "
+        "(RAG) to answer questions using the documents "
+        "stored in the local SKLearnVectorStore index."
+    )
