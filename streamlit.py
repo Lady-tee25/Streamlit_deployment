@@ -14,7 +14,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY")
 
 
@@ -140,11 +140,11 @@ st.markdown(
 # CHECK API KEYS
 # ============================================================
 
-if not GROQ_API_KEY:
+if not OPENAI_API_KEY:
 
     st.error(
         "OPENAI_API_KEY was not found.\n\n"
-        "Please add your Groq API key to the .env file."
+        "Please add your OpenAI API key to the .env file."
     )
 
     st.stop()
@@ -247,7 +247,7 @@ def load_retriever():
 def load_chat_model():
 
     chat_model = ChatOpenAI(
-        api_key=GROQ_API_KEY,
+        api_key=OPENAI_API_KEY,
         base_url=CHAT_BASE_URL,
         model=CHAT_MODEL,
         temperature=0
